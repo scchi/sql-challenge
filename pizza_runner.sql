@@ -487,6 +487,114 @@ FROM
 -- 5.  Generate an alphabetically ordered comma separated ingredient list for each pizza order from the  `customer_orders`  table and add a  `2x`  in front of any relevant ingredients
 -- -   For example:  `"Meat Lovers: 2xBacon, Beef, ... , Salami"`
 
+WITH cleaned_cte AS (
+  SELECT
+    order_id,
+    customer_id,
+    pizza_id,
+    extras,
+    exclusions,
+    ROW_NUMBER() OVER (PARTITION BY order_id) AS order_pizza_id
+  FROM
+    pizza_runner.customer_orders
+),
+regular_toppings_cte AS (
+  SELECT
+    pizza_id,
+    REGEXP_SPLIT_TO_TABLE(toppings, '[,\s]+') :: INTEGER AS topping_id
+  FROM
+    pizza_runner.pizza_recipes
+),
+base_toppings_cte AS (
+  SELECT
+    c.order_id,
+    c.customer_id,
+    c.pizza_id,
+    c.order_pizza_id,
+    r.topping_id
+  FROM
+    cleaned_cte c
+    LEFT JOIN regular_toppings_cte r ON c.pizza_id = r.pizza_id
+),
+exclusions_cte AS (
+  SELECT
+    order_id,
+    customer_id,
+    pizza_id,
+    order_pizza_id,
+    REGEXP_SPLIT_TO_TABLE(exclusions, '[,\s]+') :: INTEGER AS topping_id
+  FROM
+    cleaned_cte
+  WHERE
+    exclusions <> 'none'
+),
+extras_cte AS (
+  SELECT
+    order_id,
+    customer_id,
+    pizza_id,
+    order_pizza_id,
+    REGEXP_SPLIT_TO_TABLE(extras, '[,\s]+') :: INTEGER AS topping_id
+  FROM
+    cleaned_cte
+  WHERE
+    extras <> 'none'
+),
+combined_ingredients_cte AS (
+  SELECT
+    *
+  FROM
+    base_toppings_cte
+  EXCEPT
+  SELECT
+    *
+  FROM
+    exclusions_cte
+  UNION ALL
+  SELECT
+    *
+  FROM
+    extras_cte
+),
+joined_toppings_cte AS (
+  SELECT
+    c.order_id,
+    c.customer_id,
+    c.pizza_id,
+    c.order_pizza_id,
+    c.topping_id,
+    n.pizza_name,
+    t.topping_name,
+    COUNT(*) AS topping_count
+  FROM
+    combined_ingredients_cte c
+    INNER JOIN pizza_runner.pizza_names AS n ON c.pizza_id = n.pizza_id
+    INNER JOIN pizza_runner.pizza_toppings AS t ON c.topping_id = t.topping_id
+  GROUP BY
+    c.order_id,
+    c.customer_id,
+    c.pizza_id,
+    c.order_pizza_id,
+    c.topping_id,
+    n.pizza_name,
+    t.topping_name
+)
+SELECT
+  pizza_name ||  ': ' || STRING_AGG(
+    CASE
+      WHEN topping_count > 1 THEN topping_count || 'x ' || topping_name
+      ELSE topping_name
+      END,
+    ', '
+  ) AS ingredients_list
+FROM joined_toppings_cte
+GROUP BY
+  order_id,
+  customer_id,
+  pizza_id,
+  order_pizza_id,
+  pizza_name
+
 -- 6.  What is the total quantity of each ingredient used in all delivered pizzas sorted by most frequent first?
 
 WITH ingredients_cte AS (
